@@ -403,9 +403,9 @@ budgetRules: [
             <h2>7日分の献立ができました</h2>
 
             <p>
-              予定金額：約
-              calculatedShoppingTotal.toLocaleString()
-            </p>
+  予定金額：約
+  {calculatedShoppingTotal.toLocaleString()}円
+</p>
 
             <section className="shopping-list-card">
               <div className="shopping-list-header">
