@@ -1,286 +1,496 @@
-import OpenAI from 'openai'
+import OpenAI from "openai";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-})
+});
 
 const responseFormat = {
-  type: 'json_schema',
-  name: 'weekly_meal_plan',
+  type: "json_schema",
+  name: "weekly_meal_plan",
   strict: true,
   schema: {
-    type: 'object',
+    type: "object",
     additionalProperties: false,
-    required: ['summary', 'shoppingTrips', 'shopping', 'days'],
+    required: ["summary", "shoppingTrips", "shopping", "days"],
     properties: {
       summary: {
-        type: 'object',
+        type: "object",
         additionalProperties: false,
-        required: ['totalCost', 'outsideTotal', 'wasteRate', 'note'],
+        required: [
+          "totalCost",
+          "outsideTotal",
+          "wasteRate",
+          "note",
+          "budgetNotice",
+        ],
         properties: {
-          totalCost: { type: 'integer' },
-          outsideTotal: { type: 'integer' },
-          wasteRate: { type: 'integer' },
-          note: { type: 'string' },
+          totalCost: { type: "integer" },
+          outsideTotal: { type: "integer" },
+          wasteRate: { type: "integer" },
+          note: { type: "string" },
+          budgetNotice: { type: "string" },
         },
       },
       shoppingTrips: {
-        type: 'array',
+        type: "array",
+        minItems: 1,
+        maxItems: 1,
         items: {
-          type: 'object',
+          type: "object",
           additionalProperties: false,
-          required: ['day', 'purpose'],
+          required: ["day", "purpose"],
           properties: {
-            day: { type: 'string' },
-            purpose: { type: 'string' },
+            day: { type: "string" },
+            purpose: { type: "string" },
           },
         },
       },
       shopping: {
-        type: 'array',
+        type: "array",
+        minItems: 1,
         items: {
-          type: 'object',
+          type: "object",
           additionalProperties: false,
-          required: ['name', 'amount', 'price', 'buyOn'],
+          required: ["id", "name", "amount", "price", "buyOn"],
           properties: {
-            name: { type: 'string' },
-            amount: { type: 'string' },
-            price: { type: 'integer' },
-            buyOn: { type: 'string' },
+            id: { type: "string" },
+            name: { type: "string" },
+            amount: { type: "string" },
+            price: { type: "integer", minimum: 1 },
+            buyOn: { type: "string" },
           },
         },
       },
       days: {
-        type: 'array',
+        type: "array",
         minItems: 7,
         maxItems: 7,
         items: {
-          type: 'object',
+          type: "object",
           additionalProperties: false,
           required: [
-            'day', 'dateLabel', 'name', 'emoji', 'kcal', 'homeCost',
-            'outsideCost', 'time', 'message', 'ingredients', 'steps'
+            "day",
+            "dateLabel",
+            "name",
+            "emoji",
+            "kcal",
+            "homeCost",
+            "outsideCost",
+            "time",
+            "message",
+            "ingredients",
+            "steps",
           ],
           properties: {
-            day: { type: 'string' },
-            dateLabel: { type: 'string' },
-            name: { type: 'string' },
-            emoji: { type: 'string' },
-            kcal: { type: 'integer' },
-            homeCost: { type: 'integer' },
-            outsideCost: { type: 'integer' },
-            time: { type: 'integer' },
-            message: { type: 'string' },
+            day: { type: "string" },
+            dateLabel: { type: "string" },
+            name: { type: "string" },
+            emoji: { type: "string" },
+            kcal: { type: "integer" },
+            homeCost: { type: "integer" },
+            outsideCost: { type: "integer" },
+            time: { type: "integer" },
+            message: { type: "string" },
             ingredients: {
-              type: 'array',
+              type: "array",
+              minItems: 1,
               items: {
-                type: 'object',
+                type: "object",
                 additionalProperties: false,
-                required: ['name', 'amount'],
+                required: ["shoppingId", "name", "amount", "usageRate"],
                 properties: {
-                  name: { type: 'string' },
-                  amount: { type: 'string' },
+                  shoppingId: { type: "string" },
+                  name: { type: "string" },
+                  amount: { type: "string" },
+                  usageRate: {
+                    type: "number",
+                    minimum: 0,
+                    maximum: 1,
+                  },
                 },
               },
             },
             steps: {
-              type: 'array',
+              type: "array",
               minItems: 3,
               maxItems: 5,
-              items: { type: 'string' },
+              items: { type: "string" },
             },
           },
         },
       },
     },
   },
+};
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeBudget(value) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return Math.round(parsed);
+}
+
+function hasQuantityRevision(input) {
+  if (!input.revisionMode) {
+    return false;
+  }
+
+  const request = String(input.revisionRequest || "");
+
+  return [
+    "量",
+    "ボリューム",
+    "満腹",
+    "大盛",
+    "増や",
+    "食べ応え",
+  ].some((keyword) => request.includes(keyword));
+}
+
+function getSeason(month) {
+  if ([12, 1, 2].includes(month)) return "冬";
+  if ([3, 4, 5].includes(month)) return "春";
+  if ([6, 7, 8].includes(month)) return "夏";
+  return "秋";
 }
 
 function buildPrompt(input) {
-    const weeklyBudget = Number(input.budget)
-  const minimumShoppingTotal = Math.round(weeklyBudget * 0.8)
-  const targetShoppingTotal = Math.round(weeklyBudget * 0.9)
-  const targetDailyCost = Math.round(targetShoppingTotal / 7)
-  const minimumDailyCost = Math.round(targetDailyCost * 0.7)
-  const maximumDailyCost = Math.round(targetDailyCost * 1.3)
-  const revisionInstruction = input.revisionMode
-  ? `
-今回は、すでに作成した献立の再考です。
+  const weeklyBudget = normalizeBudget(input.budget);
+  const minimumShoppingTotal = Math.round(weeklyBudget * 0.8);
+  const targetShoppingTotal = Math.round(weeklyBudget * 0.9);
+  const targetUsedCost = Math.round(targetShoppingTotal * 0.9);
+  const targetDailyCost = Math.round(targetUsedCost / 7);
+  const quantityRevision = hasQuantityRevision(input);
 
+  const currentMonth =
+    Number(input.currentMonth) || new Date().getMonth() + 1;
+  const season = input.season || getSeason(currentMonth);
+
+  const revisionInstruction = input.revisionMode
+    ? `
+【再考】
 利用者の変更希望:
 ${input.revisionRequest || "全体をより良く見直してください。"}
 
 現在の献立:
-${JSON.stringify(input.previousPlan, null, 2)}
-現在の日付: ${input.currentDate}
-現在の月: ${input.currentMonth}月
-現在の季節: ${input.season}
+${JSON.stringify(input.previousPlan || {}, null, 2)}
 
-再考時のルール:
-- 利用者の変更希望を最優先すること。
-- 変更する必要がない料理は、できるだけ維持すること。
-- 週間予算を超えないこと。
-- 食材の使い切りと消費期限の順番を崩さないこと。
-- 買い物リストの変更を必要最低限にすること。
-- 変更後は必ず、通常と同じJSON形式で7日分すべてを返すこと。
+再考ルール:
+- 利用者の希望を最優先する。
+- 変更不要な料理は可能な範囲で維持する。
+- ${
+        quantityRevision
+          ? "今回は量の増加希望なので、食材のグレードを上げず、購入量・使用量を調整する。"
+          : "量の増加希望ではないため、予算に余裕がある場合は量ではなく食材の質を上げる。"
+      }
+- 再考後も、予算上限、食材使用率、週1回の買い物を守る。
 `
-  : "";
+    : "";
+
   return `
-  ${revisionInstruction}
-あなたは、日本で一人暮らしをする人のための献立設計AIです。
-以下の条件で、夕食7日分の献立と買い物計画を作ってください。
+${revisionInstruction}
 
-【条件】
-【金額設計・最優先】
+あなたは、日本で一人暮らしをする人向けの「七日ごはん」の献立設計AIです。
+夕食7日分を、1日につき料理1品だけ作ってください。
+
+【絶対条件】
 - 設定予算: ${weeklyBudget}円
-- 買い物合計の最低金額: ${minimumShoppingTotal}円
-- 買い物合計の目標金額: ${targetShoppingTotal}円
-- 買い物合計の上限金額: ${weeklyBudget}円
-- 1日あたりのhomeCost目標: 約${targetDailyCost}円
-- 各日のhomeCostの目安範囲: ${minimumDailyCost}円〜${maximumDailyCost}円
-- 1週間の夕食予算: ${input.budget}円
-- 買い物リスト最低金額: ${Math.round(Number(input.budget) * 0.8)}円
-- 買い物リスト目標金額: ${Math.round(Number(input.budget) * 0.9)}円
-- 買い物リスト上限金額: ${Number(input.budget)}円
-- 苦手な食材: ${input.disliked || 'なし'}
-- 使える調理器具: ${input.equipment}
-- 米・基本調味料が家にある: ${input.stapleRice ? 'はい' : 'いいえ'}
-- よく行くスーパー: ${input.supermarket}
-- 買い物に行ける曜日: ${input.shoppingDays.join('、')}
-献立モード: ${input.mealMode || "balance"}
-常備調味料: ${(input.seasonings || []).join("、")}
+- 買い物合計の最低目標: ${minimumShoppingTotal}円
+- 買い物合計の中心目標: ${targetShoppingTotal}円
+- 買い物合計の絶対上限: ${weeklyBudget}円
+- 7日間で実際に使用する食材原価の目標: 約${targetUsedCost}円
+- 1日あたりの使用原価の目安: 約${targetDailyCost}円
+- 買い物合計は絶対に設定予算を超えない。
+- 原則として買い物合計を設定予算の80%以上にする。
+- 米と常備調味料は購入せず、買い物金額にも含めない。
+- 買った食材の価格加重使用率を85%以上にする。
+- 買い物は指定曜日の1回だけ。途中の買い足しは禁止。
+- 1人分、夕食のみ、1日1品、全7日。
+- shopping[].priceは、shopping[].amountに記載した購入単位全体の、日本の一般的なスーパーでの概算購入価格。
+- days[].ingredients[].usageRateは、その購入単位のうち、その日に使う割合。0より大きく1以下。
+- 同じshoppingIdのusageRateを7日分合計した値は、原則0.85以上1以下。
+- days[].homeCostとsummary.totalCostはサーバー側で再計算するため、AIが都合よく水増ししない。
 
-【重要な設計ルール】
-1. 合計金額は必ず予算以下にする。
-2. 予算が低いほど豆腐、卵、鶏むね肉、旬の野菜などを中心にする。
-3. 予算に余裕がある場合は魚、牛肉、海老なども適度に入れる。
-4. 同じ食材を複数日に計画的に使い、食材廃棄を極力減らす。
-5. 買い物日は週に1回だけ。途中の買い足しを前提にしない。
-6. スーパー固有の正確な価格は断定せず、一般的な価格傾向として見積もる。
-7. 各レシピは一人分、手順は5工程以内。
-8. 各日のmessageは、節約中の一人暮らしの人が侘しい気持ちにならない、静かで温かい一文にする。
-9. カロリーと金額は現実的な概算にする。
-10. shoppingのbuyOnは、必ず指定された買い物曜日のいずれかにする。
-11. 7日すべて別の料理名にする。
-12. 買い物は週1回だけにし、7日分の材料を最初にまとめて購入する。
-13. shopping配列には、1週間で必要な材料を重複なしで集約して入れる。
-14. 同じ食材を複数日に分けて使い、最終日までに原則使い切る。
-15. days[].ingredients の合計量と shopping[].amount が矛盾しないようにする。
-16. 傷みやすい食材は週の前半、日持ちする食材は後半に使う。
-17. 使い切れない食材がある場合は summary.note に理由と保存方法を書く。
-18. 各日の message は、孤独や節約感を強調せず、少しユーモアのある温かい一言にする。
-19. message は40〜70文字程度で、毎日違う表現にする。
-20. 「今日も頑張りましょう」のような定型文は避ける。
-21. mealModeがbalanceの場合は、予算・栄養・味・満腹感をバランスよく両立すること。
-22. mealModeがdietの場合は、高たんぱく・野菜多め・低脂質・低カロリーを重視すること。ただし極端に量を減らさないこと。
-23. mealModeがvolumeの場合は、安価で満腹感の高い食材を使い、食べ応えを重視すること。
-24. mealModeがtasteの場合は、味・香り・食感・料理としての満足感を重視すること。
-25. 常備調味料に含まれるものは、買い物リストに追加しないこと。
-26. 常備調味料に含まれない調味料が必要な場合だけ、買い物リストに追加すること。
-27. もやし、生魚、生肉、豆腐など傷みやすい食材は週の前半に使用すること。
-28. 玉ねぎ、人参、じゃがいも、卵、冷凍可能な食材などは週の後半にも使用できる。
-29. 初日に購入した食材が、使用日まで一般的な保存期間を超えないように献立を組むこと。
-30. 生肉や魚を後半に使用する場合は、購入日に冷凍することをshoppingListまたはsummary.noteに明記すること。
-31. 現在の季節と日本の一般的な旬を考慮し、その時期に手に入りやすく価格が安定しやすい野菜・魚を優先すること。
-32. 季節外の食材を完全に禁止する必要はないが、明確な理由がなければ旬の食材を優先すること。
-33. 夏はトマト、なす、ピーマン、きゅうりなど、冬は白菜、大根、長ねぎ、かぶなどを候補として優先すること。
-34. 献立の食材構成が特定の季節に偏って不自然にならないようにすること。
-35. shopping配列内のpriceを実際に合計した金額を、必ず買い物リスト最低金額以上、買い物リスト上限金額以下にすること。summary.totalCostだけを増やして条件を満たしたことにしてはいけない。
-36. shopping配列内のpriceの実際の合計を、買い物リスト目標金額の前後に近づけること。
-37. 予算が高い場合は、食材を不必要に大量購入するのではなく、肉・魚・野菜の品質、料理の品数、栄養バランスを上げること。
-38. shopping[].priceは単価ではなく、shopping[].amountに記載した数量を購入するときの小計金額を整数で入れること。
-39. summary.totalCostは、shopping配列内のすべてのpriceを足した金額と必ず一致させること。
-40. 設定予算が20,000円以上の場合は、牛肉、魚介類、海老、質のよい肉や魚、果物、乳製品などを無理のない範囲で取り入れること。
-41. 予算を消化する目的だけで、使い切れない大量の食材や不要な調味料を追加しないこと。
-42. 献立の再考時も、買い物リストの合計金額を設定予算の80%以上100%以下に保つこと。
-43. days[].homeCostの7日分合計は、shopping[].priceの合計と大きく矛盾しないようにすること。
-44. days[].homeCostは、その日の料理に使用する食材原価の概算とすること。
-45. 各日のhomeCostは原則として${minimumDailyCost}円以上${maximumDailyCost}円以下にすること。
-46. 設定予算が20,000円以上の場合、安価な節約料理だけで7日間を構成してはいけない。
-47. 設定予算が20,000円以上の場合、牛肉料理を最低2日、鮮魚または魚介料理を最低3日入れること。
-48. 高予算の場合は、主菜だけでなく副菜、汁物、果物、乳製品なども各日の料理名・材料・homeCostに反映すること。
-49. homeCostだけを高く見せず、料理名、材料、分量、shoppingの内容を金額に見合う内容にすること。
-50. shopping[].priceの合計とdays[].homeCostの合計の差は、設定予算の10%以内にすること。
-`
+【高予算時のルール】
+- ${weeklyBudget >= 14000 ? "今回は高予算帯として扱う。" : "今回は通常予算帯として扱う。"}
+- 高予算でも、1人では食べ切れない量へ増やしてはいけない。
+- ${
+    quantityRevision
+      ? "今回は量の増加希望なので、食材の品質は維持し、適切な範囲で分量を増やす。"
+      : "予算に余裕がある場合は、量ではなく食材をグレードアップする。"
+  }
+- 高予算では、国産牛、和牛、国産豚の上位部位、地鶏、うなぎ、金目鯛、鯛、鮪、帆立、海老、蟹、いくら、質のよいチーズなどを候補にする。
+- 高級食材を使う場合も、7日間の料理として自然で、食材を使い切れる構成にする。
+- 安価な食材だけを使い、shoppingのpriceだけを高くする行為は禁止。
+- 料理名、材料、購入量、使用割合、価格のすべてを食材のグレードと一致させる。
+
+【利用条件】
+- 苦手な食材: ${input.disliked || "なし"}
+- 調理器具: ${input.equipment || "電子レンジ、フライパン、鍋、炊飯器"}
+- 買い物曜日: ${(input.shoppingDays || []).join("、")}
+- 献立モード: ${input.mealMode || "balance"}
+- 常備調味料: ${(input.seasonings || []).join("、")}
+- 現在の日付: ${input.currentDate || new Date().toLocaleDateString("ja-JP")}
+- 現在の月: ${currentMonth}月
+- 季節: ${season}
+
+【献立ルール】
+1. 7日すべて異なる料理名にする。
+2. 1日の料理は1品だけ。ただし1皿の中に主菜と野菜を組み合わせてよい。
+3. 同じ購入食材を複数日に計画的に使う。
+4. 生魚、生肉、豆腐、葉物など傷みやすいものは前半に使う。
+5. 後半に使う肉や魚は、購入日に冷凍することをsummary.noteに書く。
+6. 季節の食材を優先する。
+7. 手順は3〜5工程。
+8. messageは40〜70文字程度で、温かく、毎日異なる表現にする。
+9. mealModeがdietなら高たんぱく・野菜多め・低脂質を重視する。
+10. mealModeがvolumeなら、食材の質を不自然に下げず、食べ応えを重視する。
+11. mealModeがtasteなら、味・香り・食感を重視する。
+12. mealModeがbalanceなら、栄養・味・満足感を両立する。
+13. 常備調味料はshoppingに入れない。ingredientsには記載してよいが、その場合shoppingIdを"pantry"、usageRateを0にする。
+14. shoppingの各idは重複させない。
+15. shoppingに存在する食材をingredientsで使う場合、同じshoppingIdを指定する。
+16. summary.budgetNoticeは、80%以上使えた場合は空文字にする。
+17. どうしても80%に届かない場合だけ、可能な限り高額な内容にしたうえで、summary.budgetNoticeに「この条件では予算が高すぎるため、可能な範囲で作成しました」と書く。
+18. summary.noteには、冷凍・保存方法と、使い切れずに残る食材があればその理由を書く。
+19. summary.totalCost、summary.wasteRate、days[].homeCostは仮の整数を入れる。サーバーで正しい値へ上書きする。
+20. 必ず指定されたJSON形式だけを返す。
+`;
+}
+
+function preparePlan(rawPlan, input) {
+  const budget = normalizeBudget(input.budget);
+  const shoppingDay = input.shoppingDays[0];
+
+  const shopping = rawPlan.shopping.map((item, index) => ({
+    ...item,
+    id: String(item.id || `item-${index + 1}`),
+    price: Math.max(1, Math.round(Number(item.price) || 0)),
+    buyOn: shoppingDay,
+    checked: false,
+  }));
+
+  const shoppingById = new Map(
+    shopping.map((item) => [item.id, item])
+  );
+
+  const days = rawPlan.days.map((day) => ({
+    ...day,
+    ingredients: day.ingredients.map((ingredient) => ({
+      ...ingredient,
+      shoppingId: String(ingredient.shoppingId || ""),
+      usageRate:
+        ingredient.shoppingId === "pantry"
+          ? 0
+          : clamp(Number(ingredient.usageRate) || 0, 0, 1),
+    })),
+  }));
+
+  // 同じ購入食材の使用割合が合計100%を超えた場合は、比率を保ったまま100%へ正規化。
+  const usageTotals = new Map();
+
+  days.forEach((day) => {
+    day.ingredients.forEach((ingredient) => {
+      if (!shoppingById.has(ingredient.shoppingId)) return;
+
+      const current = usageTotals.get(ingredient.shoppingId) || 0;
+      usageTotals.set(
+        ingredient.shoppingId,
+        current + ingredient.usageRate
+      );
+    });
+  });
+
+  usageTotals.forEach((totalRate, shoppingId) => {
+    if (totalRate <= 1) return;
+
+    const scale = 1 / totalRate;
+
+    days.forEach((day) => {
+      day.ingredients.forEach((ingredient) => {
+        if (ingredient.shoppingId === shoppingId) {
+          ingredient.usageRate *= scale;
+        }
+      });
+    });
+
+    usageTotals.set(shoppingId, 1);
+  });
+
+  // 各日の原価を、購入価格 × その日の使用割合で計算。
+  const calculatedDays = days.map((day) => {
+    const homeCost = day.ingredients.reduce((total, ingredient) => {
+      const shoppingItem = shoppingById.get(ingredient.shoppingId);
+
+      if (!shoppingItem) {
+        return total;
+      }
+
+      return total + shoppingItem.price * ingredient.usageRate;
+    }, 0);
+
+    return {
+      ...day,
+      homeCost: Math.round(homeCost),
+      mood: day.message,
+      savings: Math.max(
+        0,
+        Math.round(Number(day.outsideCost) || 0) -
+          Math.round(homeCost)
+      ),
+      ingredients: day.ingredients.map((ingredient) => ({
+        name: ingredient.name,
+        amount: ingredient.amount,
+      })),
+    };
+  });
+
+  const totalCost = shopping.reduce(
+    (total, item) => total + item.price,
+    0
+  );
+
+  if (totalCost > budget) {
+    const error = new Error(
+      `AIの買い物合計が予算を超えました。買い物合計${totalCost.toLocaleString()}円、上限${budget.toLocaleString()}円です。`
+    );
+    error.statusCode = 422;
+    throw error;
+  }
+
+  const usedCost = calculatedDays.reduce(
+    (total, day) => total + day.homeCost,
+    0
+  );
+
+  const usageRate =
+    totalCost > 0 ? clamp(usedCost / totalCost, 0, 1) : 0;
+
+  const wasteRate = Math.round((1 - usageRate) * 100);
+  const minimumTotal = Math.round(budget * 0.8);
+
+  let budgetNotice = String(
+    rawPlan.summary?.budgetNotice || ""
+  ).trim();
+
+  if (totalCost >= minimumTotal) {
+    budgetNotice = "";
+  } else if (!budgetNotice) {
+    budgetNotice =
+      `この条件では予算が高すぎるため、可能な範囲で` +
+      `${totalCost.toLocaleString()}円まで使用しました。`;
+  }
+
+  const outsideTotal = calculatedDays.reduce(
+    (total, day) =>
+      total + Math.max(0, Math.round(Number(day.outsideCost) || 0)),
+    0
+  );
+
+  return {
+    ...rawPlan,
+    budget,
+    totalCost,
+    outsideTotal,
+    remaining: budget - totalCost,
+    savings: outsideTotal - totalCost,
+    wasteRate,
+    budgetUsageRate: Math.round((totalCost / budget) * 100),
+    ingredientUsageRate: Math.round(usageRate * 100),
+    budgetNotice,
+    summary: {
+      ...rawPlan.summary,
+      totalCost,
+      outsideTotal,
+      wasteRate,
+      budgetNotice,
+    },
+    shopping,
+    days: calculatedDays,
+    createdAt: new Date().toISOString(),
+    source: "ai",
+  };
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {  
-    return res.status(405).json({ error: 'POSTのみ利用できます。' })
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      error: "POSTのみ利用できます。",
+    });
   }
 
   if (!process.env.OPENAI_API_KEY) {
-    return res.status(500).json({ error: 'OPENAI_API_KEYが設定されていません。' })
+    return res.status(500).json({
+      error: "OPENAI_API_KEYが設定されていません。",
+    });
   }
 
   try {
-    const input = req.body
+    const input = req.body || {};
+    const budget = normalizeBudget(input.budget);
 
-    if (!input?.budget || !Array.isArray(input?.shoppingDays) || input.shoppingDays.length === 0) {
-      return res.status(400).json({ error: '予算と買い物日を入力してください。' })
+    if (
+      budget === null ||
+      budget < 3000 ||
+      budget > 21000
+    ) {
+      return res.status(400).json({
+        error: "予算は3,000円〜21,000円で入力してください。",
+      });
     }
 
-    const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
+    if (
+      !Array.isArray(input.shoppingDays) ||
+      input.shoppingDays.length === 0
+    ) {
+      return res.status(400).json({
+        error: "買い物日を選んでください。",
+      });
+    }
 
-const firstResponse = await client.responses.create({
-  model,
-  input: buildPrompt(input),
-  text: {
-    format: responseFormat,
-  },
-})
+    const response = await client.responses.create({
+      model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+      input: buildPrompt({
+        ...input,
+        budget,
+      }),
+      text: {
+        format: responseFormat,
+      },
+    });
 
-let plan = JSON.parse(firstResponse.output_text)
+    if (!response.output_text) {
+      throw new Error("AIから献立データを受け取れませんでした。");
+    }
 
-const budget = Number(input.budget)
-const minimumTotal = Math.round(budget * 0.8)
-const targetTotal = Math.round(budget * 0.9)
+    const rawPlan = JSON.parse(response.output_text);
+    const plan = preparePlan(rawPlan, {
+      ...input,
+      budget,
+    });
 
-const getShoppingTotal = (shopping = []) => {
-  return shopping.reduce((total, item) => {
-    const price = Number(item.price)
-
-    return total + (Number.isFinite(price) ? price : 0)
-  }, 0)
-}
-
-let shoppingTotal = getShoppingTotal(plan.shopping)
-
-
-    plan.budget = Number(input.budget)
-
-const calculatedShoppingTotal = plan.shopping.reduce((total, item) => {
-  const price = Number(item.price)
-
-  return total + (Number.isFinite(price) ? price : 0)
-}, 0)
-
-plan.totalCost = calculatedShoppingTotal
-plan.summary.totalCost = calculatedShoppingTotal
-plan.outsideTotal = plan.summary.outsideTotal
-plan.remaining = plan.budget - plan.totalCost
-    plan.savings = plan.outsideTotal - plan.totalCost
-    plan.wasteRate = plan.summary.wasteRate
-    plan.shopping = plan.shopping.map(item => ({ ...item, checked: false }))
-    plan.days = plan.days.map(item => ({
-      ...item,
-      mood: item.message,
-      savings: item.outsideCost - item.homeCost,
-      ingredients: item.ingredients.map((ingredient) => ({
-      name: ingredient.name,
-      amount: ingredient.amount,
-      })),
-
-    }))
-    plan.createdAt = new Date().toISOString()
-    plan.source = 'ai'
-
-    return res.status(200).json(plan)
+    return res.status(200).json(plan);
   } catch (error) {
-    console.error(error)
-    return res.status(500).json({
-      error: 'AI献立の作成に失敗しました。',
-      detail: error?.message || 'unknown error',
-    })
+    console.error(error);
+
+    const statusCode =
+      Number(error?.statusCode) >= 400
+        ? Number(error.statusCode)
+        : 500;
+
+    return res.status(statusCode).json({
+      error:
+        statusCode === 422
+          ? error.message
+          : "AI献立の作成に失敗しました。",
+      detail: error?.message || "unknown error",
+    });
   }
 }
