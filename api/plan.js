@@ -126,6 +126,9 @@ ${JSON.stringify(input.previousPlan, null, 2)}
 
 【条件】
 - 1週間の夕食予算: ${input.budget}円
+- 買い物リスト最低金額: ${Math.round(Number(input.budget) * 0.8)}円
+- 買い物リスト目標金額: ${Math.round(Number(input.budget) * 0.9)}円
+- 買い物リスト上限金額: ${Number(input.budget)}円
 - 苦手な食材: ${input.disliked || 'なし'}
 - 使える調理器具: ${input.equipment}
 - 米・基本調味料が家にある: ${input.stapleRice ? 'はい' : 'いいえ'}
@@ -169,8 +172,8 @@ ${JSON.stringify(input.previousPlan, null, 2)}
 32. 季節外の食材を完全に禁止する必要はないが、明確な理由がなければ旬の食材を優先すること。
 33. 夏はトマト、なす、ピーマン、きゅうりなど、冬は白菜、大根、長ねぎ、かぶなどを候補として優先すること。
 34. 献立の食材構成が特定の季節に偏って不自然にならないようにすること。
-35. 買い物リストの合計金額は、設定予算の80%以上100%以下にすること。
-36. 買い物リストの目標金額は、設定予算の90%前後とすること。
+35. shopping配列内のpriceを実際に合計した金額を、必ず買い物リスト最低金額以上、買い物リスト上限金額以下にすること。summary.totalCostだけを増やして条件を満たしたことにしてはいけない。
+36. shopping配列内のpriceの実際の合計を、買い物リスト目標金額の前後に近づけること。
 37. 予算が高い場合は、食材を不必要に大量購入するのではなく、肉・魚・野菜の品質、料理の品数、栄養バランスを上げること。
 38. shopping[].priceは単価ではなく、shopping[].amountに記載した数量を購入するときの小計金額を整数で入れること。
 39. summary.totalCostは、shopping配列内のすべてのpriceを足した金額と必ず一致させること。
