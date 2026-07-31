@@ -222,42 +222,6 @@ const getShoppingTotal = (shopping = []) => {
 
 let shoppingTotal = getShoppingTotal(plan.shopping)
 
-if (shoppingTotal < minimumTotal || shoppingTotal > budget) {
-  const adjustmentPrompt = `
-以下の献立を、買い物リストの金額条件に合うように修正してください。
-
-設定予算: ${budget}円
-最低金額: ${minimumTotal}円
-目標金額: ${targetTotal}円
-最大金額: ${budget}円
-現在の買い物合計: ${shoppingTotal}円
-
-現在の献立:
-${JSON.stringify(plan, null, 2)}
-
-【必須条件】
-- shopping内のpriceを実際に足した金額を、${minimumTotal}円以上${budget}円以下にする。
-- 目標は${targetTotal}円前後とする。
-- shopping[].priceは、amountに書かれた購入量全体の小計金額とする。
-- summary.totalCostはshopping[].priceの合計と一致させる。
-- 予算に余裕がある場合は、不必要に量を増やさず、肉・魚・野菜の品質や品数を上げる。
-- 高予算の場合は、牛肉、魚介類、海老、果物、乳製品なども適度に取り入れる。
-- 食品ロスが出るような大量購入はしない。
-- 7日分の献立、材料、作り方、買い物リストをすべて修正後の内容に合わせる。
-- 必ず指定されたJSON形式だけで返す。
-`
-
-  const adjustedResponse = await client.responses.create({
-    model,
-    input: adjustmentPrompt,
-    text: {
-      format: responseFormat,
-    },
-  })
-
-  plan = JSON.parse(adjustedResponse.output_text)
-  shoppingTotal = getShoppingTotal(plan.shopping)
-}
 
     plan.budget = Number(input.budget)
 
