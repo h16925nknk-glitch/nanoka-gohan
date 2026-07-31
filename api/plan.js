@@ -97,6 +97,12 @@ const responseFormat = {
 }
 
 function buildPrompt(input) {
+    const weeklyBudget = Number(input.budget)
+  const minimumShoppingTotal = Math.round(weeklyBudget * 0.8)
+  const targetShoppingTotal = Math.round(weeklyBudget * 0.9)
+  const targetDailyCost = Math.round(targetShoppingTotal / 7)
+  const minimumDailyCost = Math.round(targetDailyCost * 0.7)
+  const maximumDailyCost = Math.round(targetDailyCost * 1.3)
   const revisionInstruction = input.revisionMode
   ? `
 今回は、すでに作成した献立の再考です。
@@ -125,6 +131,13 @@ ${JSON.stringify(input.previousPlan, null, 2)}
 以下の条件で、夕食7日分の献立と買い物計画を作ってください。
 
 【条件】
+【金額設計・最優先】
+- 設定予算: ${weeklyBudget}円
+- 買い物合計の最低金額: ${minimumShoppingTotal}円
+- 買い物合計の目標金額: ${targetShoppingTotal}円
+- 買い物合計の上限金額: ${weeklyBudget}円
+- 1日あたりのhomeCost目標: 約${targetDailyCost}円
+- 各日のhomeCostの目安範囲: ${minimumDailyCost}円〜${maximumDailyCost}円
 - 1週間の夕食予算: ${input.budget}円
 - 買い物リスト最低金額: ${Math.round(Number(input.budget) * 0.8)}円
 - 買い物リスト目標金額: ${Math.round(Number(input.budget) * 0.9)}円
@@ -180,6 +193,14 @@ ${JSON.stringify(input.previousPlan, null, 2)}
 40. 設定予算が20,000円以上の場合は、牛肉、魚介類、海老、質のよい肉や魚、果物、乳製品などを無理のない範囲で取り入れること。
 41. 予算を消化する目的だけで、使い切れない大量の食材や不要な調味料を追加しないこと。
 42. 献立の再考時も、買い物リストの合計金額を設定予算の80%以上100%以下に保つこと。
+43. days[].homeCostの7日分合計は、shopping[].priceの合計と大きく矛盾しないようにすること。
+44. days[].homeCostは、その日の料理に使用する食材原価の概算とすること。
+45. 各日のhomeCostは原則として${minimumDailyCost}円以上${maximumDailyCost}円以下にすること。
+46. 設定予算が20,000円以上の場合、安価な節約料理だけで7日間を構成してはいけない。
+47. 設定予算が20,000円以上の場合、牛肉料理を最低2日、鮮魚または魚介料理を最低3日入れること。
+48. 高予算の場合は、主菜だけでなく副菜、汁物、果物、乳製品なども各日の料理名・材料・homeCostに反映すること。
+49. homeCostだけを高く見せず、料理名、材料、分量、shoppingの内容を金額に見合う内容にすること。
+50. shopping[].priceの合計とdays[].homeCostの合計の差は、設定予算の10%以内にすること。
 `
 }
 
