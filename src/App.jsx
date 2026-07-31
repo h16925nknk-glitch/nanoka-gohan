@@ -444,10 +444,8 @@ budgetRules: [
                 <span>買い物予定額</span>
 
                 <strong>
-                  約
-                  calculatedShoppingTotal.toLocaleString()
-                  円
-                </strong>
+  約{calculatedShoppingTotal.toLocaleString()}円
+</strong>
               </div>
             </section>
 
